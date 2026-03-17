@@ -1,41 +1,36 @@
 # Lexplain Ingredient Builder
 
-Production-ready multi-agent pipeline to generate legally provable IPC ingredients from structured IPC JSON.
+Production-ready multi-agent pipeline to generate legally provable IPC ingredients from nested IPC JSON.
 
-## Features
-- Multi-agent architecture:
-  - `SectionExtractorAgent`
-  - `GeminiIngredientAgent`
-  - `IngredientValidationAgent`
-  - `IngredientDatabaseBuilder`
-- Async parallel processing with bounded concurrency
-- Gemini API integration with exponential backoff retries
-- Deterministic generation configuration (`temperature=0`)
-- JSON-safe output with stable ordering
-- Pydantic validation across pipeline boundaries
-- Structured logging for observability
-
-## Input format
-Nested IPC JSON (Act -> Chapters -> Sections -> paragraphs). The extractor scans recursively and finds section dictionaries containing `paragraphs`.
-
-## Output format
-`ingredients_ipc.json`:
+## Output shape (exact)
+The system now writes `ingredients_ipc.json` as a list of objects in this format:
 
 ```json
-{
-  "IPC": {
-    "23": {
-      "heading": "Wrongful Gain",
-      "ingredients": [
-        "Property involved",
-        "Gain obtained",
-        "Unlawful means used",
-        "No legal entitlement"
-      ]
-    }
+[
+  {
+    "section_id": "IPC_420",
+    "name": "Cheating and dishonestly inducing delivery of property",
+    "section_type": "substantive",
+    "ingredients": [
+      {
+        "ingredient_id": "IPC_420_I1",
+        "name": "deceptive_act",
+        "description": "The accused made a false or deceptive representation",
+        "match_patterns": ["fraud", "cheat", "deceiv"],
+        "weight": 0.34
+      }
+    ],
+    "match_patterns": ["fraud", "cheat", "deceiv"],
+    "weight": 1.0
   }
-}
+]
 ```
+
+## Agents
+- `SectionExtractorAgent`: recursively parses complex nested `paragraphs` including `text` + `contains` blocks.
+- `GeminiIngredientAgent`: calls Gemini (`gemini-2.0-pro` default), enforces strict schema, deterministic settings, retries.
+- `IngredientValidationAgent`: removes ungrounded ingredients using deterministic semantic similarity (threshold default `0.6`).
+- `IngredientDatabaseBuilder`: writes final JSON-safe ordered output.
 
 ## Setup
 ```bash
@@ -47,8 +42,9 @@ pip install -r requirements.txt
 Create `.env`:
 ```bash
 GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.0-pro
 MAX_CONCURRENCY=20
+SIMILARITY_THRESHOLD=0.6
 ```
 
 ## Run
@@ -56,8 +52,6 @@ MAX_CONCURRENCY=20
 python -m lexplain_ingredient_builder.main --input ipc_sections.json --output ingredients_ipc.json
 ```
 
-## Performance guidance
-For ~500 sections:
-- Set `MAX_CONCURRENCY` based on quota/rate-limit constraints (20–40 typical)
-- Keep retries enabled for transient failures
-- Use stable model choice (`gemini-1.5-flash`) for speed/cost balance
+## Notes
+- Handles section names like `Section 228A.` and produces `section_id: IPC_228A`.
+- Designed to process large batches (e.g., 500 sections) with async bounded concurrency.

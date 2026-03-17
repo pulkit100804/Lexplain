@@ -5,10 +5,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from lexplain_ingredient_builder.agents.builder_agent import (
-    IngredientDatabaseBuilder,
-    SectionIngredients,
-)
+from lexplain_ingredient_builder.agents.builder_agent import IngredientDatabaseBuilder, SectionIngredientRecord
 from lexplain_ingredient_builder.agents.gemini_agent import GeminiIngredientAgent
 from lexplain_ingredient_builder.agents.section_extractor import SectionExtractorAgent
 from lexplain_ingredient_builder.agents.validator_agent import IngredientValidationAgent
@@ -34,23 +31,31 @@ async def process_sections(input_path: Path, output_path: Path) -> None:
 
     semaphore = asyncio.Semaphore(settings.max_concurrency)
 
-    async def process_single(item) -> SectionIngredients:
+    async def process_single(item) -> SectionIngredientRecord:
         async with semaphore:
             draft = await gemini_agent.generate_ingredients(
-                section=item.section,
+                section_id=item.section_id,
                 heading=item.heading,
                 text=item.text,
             )
-            validated = validator_agent.validate(
-                section=item.section,
-                text=item.text,
-                ingredients=draft.ingredients,
-            )
-            return SectionIngredients(
-                section=item.section,
-                heading=item.heading,
-                ingredients=validated.ingredients,
-            )
+            validated = validator_agent.validate(draft=draft, text=item.text)
+
+            final_draft = draft.model_copy(deep=True)
+            final_draft.ingredients = validated.ingredients
+
+            if final_draft.ingredients:
+                total = round(sum(ing.weight for ing in final_draft.ingredients), 2)
+                if total != 1.0:
+                    # deterministic normalize
+                    each = round(1.0 / len(final_draft.ingredients), 2)
+                    for ing in final_draft.ingredients[:-1]:
+                        ing.weight = each
+                    final_draft.ingredients[-1].weight = round(
+                        1.0 - sum(i.weight for i in final_draft.ingredients[:-1]), 2
+                    )
+                final_draft.match_patterns = gemini_agent._derive_section_patterns(final_draft.ingredients)
+
+            return SectionIngredientRecord.model_validate(final_draft.model_dump())
 
     tasks = [asyncio.create_task(process_single(item)) for item in extracted]
     processed = await asyncio.gather(*tasks)
@@ -61,12 +66,7 @@ async def process_sections(input_path: Path, output_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Lexplain Ingredient Builder")
-    parser.add_argument(
-        "--input",
-        type=Path,
-        required=True,
-        help="Path to input IPC JSON file",
-    )
+    parser.add_argument("--input", type=Path, required=True, help="Path to input IPC JSON file")
     parser.add_argument(
         "--output",
         type=Path,
